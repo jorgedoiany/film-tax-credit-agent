@@ -20,3 +20,6 @@ env/
 
 # Logs
 *.log
+
+# Data
+data/vector_store/

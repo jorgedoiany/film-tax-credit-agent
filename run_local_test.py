@@ -1,16 +1,19 @@
 """
 run_local_test.py
 
-Manual deterministic test runner for the Art. 39 LangGraph pipeline.
+Manual deterministic + RAG test runner for the Art. 39 LangGraph pipeline.
 
 Run with:
     python run_local_test.py
+
+Make sure:
+    ollama serve
+is running if using LegalReasoningNode.
 """
 
 from __future__ import annotations
 
 from typing import cast
-
 from core.langgraph_flow import build_art39_graph, Art39State
 
 
@@ -47,10 +50,6 @@ def main() -> None:
     # ------------------------------------------------------------
     # 2) Build Initial State
     # ------------------------------------------------------------
-    # NOTE:
-    # - We construct initial_state as a plain dict for readability,
-    #   then cast it to Art39State to satisfy static type checkers.
-    # - LangGraph itself accepts dict-like objects at runtime.
 
     initial_state = cast(Art39State, {
         "ncf_rows": ncf_rows,
@@ -58,35 +57,45 @@ def main() -> None:
         "rows_609": rows_609,
         "cast_crew_rows": cast_crew_rows,
 
+        # Legal question triggers RAG + Ollama reasoning
+        "legal_question": "Explain the relationship between Article 39 and Article 999",
+
         "applicant_id": "101234567",
         "project_id": "MOVIE-001",
         "fiscal_year": 2026,
 
-        # FX rates must be explicit. For MVP we hardcode an example rate.
-        # In Streamlit, you will request this input from the user.
+        # FX rate (MVP hardcoded)
         "fx_to_usd": {"DOP": 1 / 58.5, "USD": 1.0},
 
         # Participation settings
         "waiver_override_present": False,
         "resident_flags": {},
 
-        # Credit utilization planning (optional)
+        # Credit usage
         "acquisition_fiscal_year": 2026,
         "transferee_isr_due_by_year_usd": {2026: 500_000},
 
-        # Always initialize audit_trace to avoid missing-key confusion
+        # Always initialize
         "audit_trace": [],
     })
 
     # ------------------------------------------------------------
     # 3) Build Graph and Run
     # ------------------------------------------------------------
+
     graph = build_art39_graph()
-    result = graph.invoke(initial_state)
+
+    try:
+        result = graph.invoke(initial_state)
+    except Exception as e:
+        print("\n⚠️ ERROR DURING EXECUTION")
+        print(e)
+        return
 
     # ------------------------------------------------------------
-    # 4) Print Results
+    # 4) Print Deterministic Results
     # ------------------------------------------------------------
+
     print("\n=== COMPLIANCE STATUS ===")
     print(result["compliance_status"])
 
@@ -98,6 +107,29 @@ def main() -> None:
 
     print("\n=== CREDIT RESULT ===")
     print(result["credit_result"])
+
+    # ------------------------------------------------------------
+    # 5) Print AI Layer (if available)
+    # ------------------------------------------------------------
+
+    if result.get("legal_analysis"):
+        print("\n=== LEGAL ANALYSIS (LOCAL LLM) ===")
+        print(result["legal_analysis"])
+
+    if result.get("legal_retrieved_chunk_ids"):
+        print("\n=== RETRIEVED LEGAL CHUNKS ===")
+        print(result["legal_retrieved_chunk_ids"])
+
+    if result.get("legal_citation_valid") is not None:
+        print("\n=== CITATION VALIDATION ===")
+        print("Valid:", result["legal_citation_valid"])
+
+    if result.get("legal_citation_warnings"):
+        print("Warnings:", result["legal_citation_warnings"])
+
+    # ------------------------------------------------------------
+    # 6) Audit Trace
+    # ------------------------------------------------------------
 
     print("\n=== AUDIT TRACE ===")
     for line in result["audit_trace"]:
