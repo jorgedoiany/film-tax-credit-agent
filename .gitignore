@@ -22,4 +22,4 @@ env/
 *.log
 
 # Data
-data/vector_store/
+data/vector_store/.venv-*/
