@@ -80,6 +80,7 @@ class CrossCheckResult:
     reported_in_609: bool
     reporting_verified: bool
     rationale: List[str]
+    amount_matches_606: Optional[bool] = None
 
 
 # ============================================================
@@ -186,6 +187,7 @@ def cross_check_one_expense(
 
     reported_606 = False
     attempted_606 = False
+    amount_matches_606: Optional[bool] = None
 
     if supplier_rnc and ncf:
         attempted_606 = True
@@ -200,14 +202,23 @@ def cross_check_one_expense(
                     matched = row
                     break
 
-            if matched is None:
-                matched = candidates[0]
-
             reported_606 = True
-            rationale.append(
-                f"606 match found by (RNC, NCF)=({supplier_rnc}, {ncf}), "
-                f"candidates={len(candidates)}."
-            )
+            amount_matches_606 = matched is not None
+
+            if amount_matches_606:
+                rationale.append(
+                    f"606 match found by (RNC, NCF)=({supplier_rnc}, {ncf}), "
+                    f"candidates={len(candidates)}, amount matches."
+                )
+            else:
+                amounts_606 = ", ".join(
+                    str(c.get("Total Monto Facturado")) for c in candidates
+                )
+                rationale.append(
+                    f"606 match found by (RNC, NCF)=({supplier_rnc}, {ncf}) "
+                    f"but the amount differs: ledger={ncf_row.get('Total')}, "
+                    f"606=[{amounts_606}]."
+                )
         else:
             rationale.append(
                 f"No 606 match found for (RNC, NCF)=({supplier_rnc}, {ncf})."
@@ -282,6 +293,7 @@ def cross_check_one_expense(
         reported_in_609=reported_609,
         reporting_verified=reporting_verified,
         rationale=rationale,
+        amount_matches_606=amount_matches_606,
     )
 
 
@@ -304,7 +316,11 @@ def cross_check_expenses(
 
     enriched_rows: List[Dict[str, Any]] = []
 
-    for row in ncf_rows:
+    # An invoice is identified by (supplier RNC, NCF). The first occurrence
+    # counts; later rows with the same pair are flagged as duplicates.
+    first_seen: Dict[Tuple[str, str], Tuple[int, Any]] = {}
+
+    for position, row in enumerate(ncf_rows, start=1):
         result = cross_check_one_expense(
             row,
             index_606=index_606,
@@ -317,8 +333,23 @@ def cross_check_expenses(
         new_row["_reported_in_606"] = result.reported_in_606
         new_row["_reported_in_609"] = result.reported_in_609
         new_row["_reporting_verified"] = result.reporting_verified
+        new_row["_606_amount_matches"] = result.amount_matches_606
         new_row["_reporting_rationale"] = result.rationale
 
+        key = (_norm_str(row.get("RNC")), _norm_str(row.get("Numero NCF")))
+        new_row["_duplicate_of_row"] = None
+        new_row["_duplicate_first_total"] = None
+
+        if key[0] and key[1]:
+            if key in first_seen:
+                first_position, first_total = first_seen[key]
+                new_row["_duplicate_of_row"] = first_position
+                new_row["_duplicate_first_total"] = first_total
+            else:
+                first_seen[key] = (position, row.get("Total"))
+
         enriched_rows.append(new_row)
+
+    return enriched_rows
 
     return enriched_rows
