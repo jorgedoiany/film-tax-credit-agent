@@ -17,9 +17,15 @@ from __future__ import annotations
 import re
 from typing import Dict, Any, TypedDict, List, Mapping, Optional
 from langgraph.graph import StateGraph, END
+from dataclasses import asdict
 
 from .report_crosscheck import cross_check_expenses, ReportingPolicy
-from .threshold_validator import ThresholdEngine, FXPolicy, build_validated_rows_from_validator_output
+from .threshold_validator import (
+    ThresholdEngine,
+    ThresholdPolicy,
+    FXPolicy,
+    build_validated_rows_from_validator_output,
+)
 from .participation_validator import ParticipationEngine, CrewRow
 from .credit_calculator import CreditCalculator, CreditComputationInputs
 
@@ -42,6 +48,10 @@ class Art39State(TypedDict):
 
     waiver_override_present: bool
     resident_flags: Dict[str, bool]
+
+    # Optional: "foreign" or "dominican". Art. 39 Paragraph III applies the
+    # Dominican participation requirement to foreign productions only.
+    production_origin: str
 
     acquisition_fiscal_year: int
     transferee_isr_due_by_year_usd: Dict[int, float]
@@ -396,7 +406,8 @@ def threshold_node(state: Art39State) -> Art39State:
         to_usd_rate={_normalize_currency(k): float(v) for k, v in state["fx_to_usd"].items()}
     )
 
-    engine = ThresholdEngine(fx_policy=fx_policy)
+    policy = ThresholdPolicy()
+    engine = ThresholdEngine(fx_policy=fx_policy, threshold_policy=policy)
 
     validated_rows = build_validated_rows_from_validator_output(
         state["expense_validation_outputs"]
@@ -409,11 +420,17 @@ def threshold_node(state: Art39State) -> Art39State:
         fiscal_year=state["fiscal_year"],
     )
 
+    shortfall = max(0.0, policy.minimum_usd - result.total_validated_usd)
+
     return {
         **state,
         "threshold_result": {
             "eligible_to_request": result.eligible_to_request,
             "total_validated_usd": result.total_validated_usd,
+            "minimum_usd": policy.minimum_usd,
+            "shortfall_usd": round(shortfall, 2),
+            "counted_expenses": result.counted_expenses,
+            "excluded_expenses": result.excluded_expenses,
             "rationale": result.rationale,
         },
         "audit_trace": audit,
@@ -424,11 +441,35 @@ def participation_node(state: Art39State) -> Art39State:
     """
     Compute Dominican/resident participation ratio from Cast & Crew list.
 
+    Art. 39 Paragraph III applies the minimum participation to FOREIGN
+    productions. For a Dominican production the requirement does not apply
+    and does not block the request.
+
     IMPORTANT:
     - "Participation of Dominican personnel" refers to crew/staff positions,
       NOT suppliers/vendors.
+    - If production_origin is missing, "foreign" is assumed (strict) and a
+      warning is returned.
     """
     audit = _append_audit(state, "ParticipationNode: Computing Dominican participation.")
+
+    warnings: List[str] = []
+    origin_raw = state.get("production_origin")
+
+    if origin_raw is None or not str(origin_raw).strip():
+        origin = "foreign"
+        warnings.append(
+            "production_origin not provided; assuming a foreign production, "
+            "so the Art. 39 Paragraph III participation requirement is applied."
+        )
+    else:
+        origin = str(origin_raw).strip().lower()
+        if origin not in {"foreign", "dominican"}:
+            raise ValueError(
+                f"Invalid production_origin '{origin_raw}'. Use 'foreign' or 'dominican'."
+            )
+
+    applicable = origin == "foreign"
 
     engine = ParticipationEngine()
 
@@ -453,12 +494,27 @@ def participation_node(state: Art39State) -> Art39State:
         resident_flags=state.get("resident_flags", {}),
     )
 
+    rationale = list(result.rationale)
+    if not applicable:
+        rationale.append(
+            "Production origin is Dominican: the Paragraph III participation "
+            "requirement does not apply."
+        )
+
     return {
         **state,
         "participation_result": {
-            "compliant": result.compliant,
+            "applicable": applicable,
+            # True when the requirement is met OR does not apply.
+            "compliant": result.compliant if applicable else True,
             "ratio": result.participation_ratio,
-            "rationale": result.rationale,
+            "minimum_required_ratio": result.minimum_required_ratio,
+            "dominican_or_resident_count": result.dominican_or_resident_count,
+            "total_personnel_count": result.total_personnel_count,
+            "waiver_override_used": result.waiver_override_used,
+            "issues": [asdict(i) for i in result.issues],
+            "warnings": warnings,
+            "rationale": rationale,
         },
         "audit_trace": audit,
     }
@@ -470,6 +526,8 @@ def credit_node(state: Art39State) -> Art39State:
 
     Note:
     - Usability/caps are handled by CreditCalculator, not by the LLM.
+    - This is an informational calculation on validated spend; whether the
+      credit can be requested is decided in SummaryNode.
     """
     audit = _append_audit(state, "CreditNode: Computing 25% transferable credit.")
 
@@ -489,7 +547,9 @@ def credit_node(state: Art39State) -> Art39State:
         **state,
         "credit_result": {
             "gross_credit_usd": result.gross_credit_usd,
+            "year_plan": [asdict(p) for p in result.year_plan],
             "warnings": result.warnings,
+            "rationale": result.rationale,
         },
         "audit_trace": audit,
     }
@@ -497,19 +557,74 @@ def credit_node(state: Art39State) -> Art39State:
 
 def summary_node(state: Art39State) -> Art39State:
     """
-    Combine deterministic outcomes into final compliance status.
+    Combine deterministic outcomes into the final compliance status.
+
+    - gross_credit_usd: informational, 25% of validated spend.
+    - requestable_credit_usd: the same amount only if the request is eligible,
+      otherwise 0.0.
+    - excluded_expenses: every expense excluded by validation, with reasons.
+    - fx_excluded_expenses: validated expenses left out of the threshold
+      because no FX rate was provided (a configuration issue, not a spend issue).
+    - blocking_reasons: short list explaining why the request is not eligible.
     """
     audit = _append_audit(state, "SummaryNode: Building final compliance decision.")
 
-    threshold_ok = state["threshold_result"]["eligible_to_request"]
-    participation_ok = state["participation_result"]["compliant"]
+    threshold = state["threshold_result"]
+    participation = state["participation_result"]
+
+    threshold_ok = threshold["eligible_to_request"]
+    participation_ok = participation["compliant"]
+    eligible = threshold_ok and participation_ok
+
+    gross_credit = state["credit_result"]["gross_credit_usd"]
+
+    excluded_expenses = [
+        {
+            "expense_id": row["expense_id"],
+            "reasons": row["exclusion_reasons"],
+        }
+        for row in state["expense_validation_outputs"]
+        if not row["validatable"]
+    ]
+
+    fx_excluded = [
+        e for e in threshold["excluded_expenses"]
+        if "missing FX rate" in e["reason"]
+    ]
+
+    blocking_reasons: List[str] = []
+
+    if not threshold_ok:
+        blocking_reasons.append(
+            f"Validated spend USD {threshold['total_validated_usd']:,.2f} is below the "
+            f"USD {threshold['minimum_usd']:,.2f} minimum "
+            f"(short by USD {threshold['shortfall_usd']:,.2f})."
+        )
+
+    if fx_excluded:
+        blocking_reasons.append(
+            f"{len(fx_excluded)} validated expense(s) were left out because no FX rate "
+            "was provided for their currency; the validated spend may be understated."
+        )
+
+    if not participation_ok:
+        blocking_reasons.append(
+            f"Dominican/resident participation {participation['ratio']:.1%} is below the "
+            f"required {participation['minimum_required_ratio']:.0%}."
+        )
 
     compliance_status = {
         "threshold_met": threshold_ok,
         "participation_met": participation_ok,
-        "eligible_to_request": threshold_ok and participation_ok,
-        "validated_spend_usd": state["threshold_result"]["total_validated_usd"],
-        "gross_credit_usd": state["credit_result"]["gross_credit_usd"],
+        "participation_applicable": participation["applicable"],
+        "eligible_to_request": eligible,
+        "validated_spend_usd": threshold["total_validated_usd"],
+        "gross_credit_usd": gross_credit,
+        "requestable_credit_usd": gross_credit if eligible else 0.0,
+        "blocking_reasons": blocking_reasons,
+        "excluded_expenses": excluded_expenses,
+        "fx_excluded_expenses": fx_excluded,
+        "warnings": list(participation["warnings"]),
     }
 
     return {
