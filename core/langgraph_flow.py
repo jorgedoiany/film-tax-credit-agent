@@ -317,14 +317,14 @@ def validate_expenses_node(state: Art39State) -> Art39State:
 
     Rules enforced (MVP):
     - Reporting must be verified
-    - Must appear in 606
+    - Must appear in 606, with the same amount as the ledger
     - Gross amount must be > 0
+    - Must not be a duplicate of an earlier row (same supplier RNC + NCF)
     - If document type is B17 or E47 (foreign payment),
       it must also appear in 609
 
-    Why here (not in cross-check):
-    - Cross-check computes facts (reported_in_606/609, verified).
-    - Validation decides whether the expense is currently "validatable".
+    Each output row carries `exclusion_reasons` (empty when validatable) so the
+    user can see exactly why an expense was excluded.
     """
     audit = _append_audit(state, "ValidateExpensesNode: Applying deterministic validation.")
 
@@ -340,14 +340,29 @@ def validate_expenses_node(state: Art39State) -> Art39State:
         reporting_verified = row.get("_reporting_verified") is True
         reported_606 = row.get("_reported_in_606") is True
         reported_609 = row.get("_reported_in_609") is True
+        amount_matches_606 = row.get("_606_amount_matches")
+        duplicate_of = row.get("_duplicate_of_row")
 
-        # Base conditions (local purchases must be in 606 and verification must be possible)
-        valid = reporting_verified and reported_606 and gross > 0
+        reasons: List[str] = []
 
-        # Foreign payment enforcement
-        if doc_type in {"B17", "E47"}:
-            if not reported_609:
-                valid = False
+        if not reporting_verified:
+            reasons.append("Reporting could not be verified (missing RNC/NCF or required 609 data).")
+        if not reported_606:
+            reasons.append("Not found in 606.")
+        elif amount_matches_606 is not True:
+            reasons.append("Amount differs from the 606 report.")
+        if gross <= 0:
+            reasons.append("Amount must be greater than zero.")
+        if doc_type in {"B17", "E47"} and not reported_609:
+            reasons.append("Foreign payment not found in 609.")
+        if duplicate_of is not None:
+            reasons.append(
+                f"Duplicate of row {duplicate_of} (same RNC and NCF; "
+                f"this row Total={row['Total']}, row {duplicate_of} "
+                f"Total={row.get('_duplicate_first_total')})."
+            )
+
+        valid = not reasons
 
         validated_rows.append({
             "expense_id": row.get("Numero NCF", "UNSPECIFIED"),
@@ -357,6 +372,7 @@ def validate_expenses_node(state: Art39State) -> Art39State:
             "validatable": valid,
             "validated_amount": gross if valid else 0.0,
             "currency": currency,
+            "exclusion_reasons": reasons,
         })
 
     return {
