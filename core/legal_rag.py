@@ -21,7 +21,6 @@ import re
 import os
 import json
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 
 @dataclass(frozen=True)
@@ -42,6 +41,8 @@ class LegalRAG:
     ):
         self.file_path = file_path
         self.cache_path = cache_path
+        # Imported lazily so the module can be imported without torch installed.
+        from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer(model_name)
         self.chunks: List[LegalChunk] = []
 

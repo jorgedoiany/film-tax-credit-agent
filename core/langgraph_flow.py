@@ -18,9 +18,6 @@ import re
 from typing import Dict, Any, TypedDict, List, Mapping, Optional
 from langgraph.graph import StateGraph, END
 
-from core.legal_rag import LegalRAG
-from core.local_llm import LocalLLM
-
 from .report_crosscheck import cross_check_expenses, ReportingPolicy
 from .threshold_validator import ThresholdEngine, FXPolicy, build_validated_rows_from_validator_output
 from .participation_validator import ParticipationEngine, CrewRow
@@ -205,6 +202,11 @@ def legal_reasoning_node(state: Art39State) -> Art39State:
             "legal_citation_valid": True,
             "legal_citation_warnings": [],
         }
+
+    # Imported lazily: the RAG stack (torch, sentence-transformers) is optional
+    # and only needed when a legal_question is provided.
+    from .legal_rag import LegalRAG
+    from .local_llm import LocalLLM
 
     rag = LegalRAG("data/legal_sources/article_39_structured.txt")
     llm = LocalLLM(model="mistral")  # Keep model configurable if you wish.
