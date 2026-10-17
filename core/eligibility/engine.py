@@ -30,6 +30,7 @@ CENT = Decimal("0.01")
 
 STANDARD_TYPES = {"B01", "E31"}
 SPECIAL_TYPES = {"B14", "E44"}
+FOREIGN_TYPES = {"B17", "E47"}  # payments abroad (reported in the 609)
 
 REF_DGCINE = "DGCINE requirement (article to be confirmed)"
 REF_188 = "Decree 370-11, Art. 188"
@@ -151,6 +152,12 @@ def _check_itbis(e, concept: Concept, project: ProjectContext, params) -> List[R
     is_zero = abs(itbis) < _d("0.005")
     regime = concept.itbis_regime
 
+    if ncf_type in FOREIGN_TYPES:
+        # Payments abroad: the ITBIS matrix does not apply.
+        # TODO: confirm with the validation guide whether and how these expenses
+        # count, since Art. 39 refers to spending made in the Dominican Republic.
+        return []
+
     if ncf_type in STANDARD_TYPES:
         if abs(itbis - expected) <= tol:
             return []
@@ -198,7 +205,7 @@ def _check_itbis(e, concept: Concept, project: ProjectContext, params) -> List[R
 
     return [_rej("NCF_TYPE_UNSUPPORTED",
                  f"Receipt type {ncf_type} is not evaluated by this prototype "
-                 "(only B01, E31, B14, E44).",
+                 "(only B01, E31, B14, E44, B17, E47).",
                  REF_PROTOTYPE, e)]
 
 
@@ -219,9 +226,19 @@ def evaluate_project(
     *,
     catalog: Optional[Dict[str, Concept]] = None,
     params: Optional[EligibilityParams] = None,
+    prerejected: Optional[Dict[str, Sequence[Rejection]]] = None,
+    skip_ncf_rules: bool = False,
 ) -> EligibilityReport:
+    """
+    prerejected: expense_id -> rejections already decided upstream (for example
+        by the 606/609 cross-check). They are merged with this engine's own
+        reasons, and those expenses do not count toward the 6% and 3% caps.
+    skip_ncf_rules: when True, the caller owns the NCF-present and duplicate-NCF
+        checks, so this engine does not repeat them.
+    """
     catalog = catalog or load_catalog()
     params = params or EligibilityParams()
+    prerejected = prerejected or {}
 
     rate_b = fx.convert_to_usd(1.0, project.budget_currency)
     budget_usd = fx.convert_to_usd(project.approved_budget_total, project.budget_currency)
@@ -235,10 +252,11 @@ def evaluate_project(
 
     for e in ordered:
         concept = catalog.get(e.concept_code)
-        r: List[Rejection] = []
+        r: List[Rejection] = list(prerejected.get(e.expense_id, ()))
         r += _check_technical(e, concept, fx)
-        r += _check_ncf_present(e)
-        r += _check_duplicate(e, seen)
+        if not skip_ncf_rules:
+            r += _check_ncf_present(e)
+            r += _check_duplicate(e, seen)
         r += _check_payment(e, params)
         if concept is not None:
             r += _check_itbis(e, concept, project, params)
