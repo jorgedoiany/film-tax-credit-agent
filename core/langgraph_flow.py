@@ -14,8 +14,12 @@ Refactoring goals:
 
 from __future__ import annotations
 
+from datetime import date
+from .eligibility.engine import evaluate_project
+from .eligibility.models import ExpenseRecord, ProjectContext, Rejection
+
 import re
-from typing import Dict, Any, TypedDict, List, Mapping, Optional
+from typing import Dict, Any, TypedDict, List, Mapping, Optional, Tuple
 from langgraph.graph import StateGraph, END
 from dataclasses import asdict
 
@@ -52,6 +56,13 @@ class Art39State(TypedDict):
     # Optional: "foreign" or "dominican". Art. 39 Paragraph III applies the
     # Dominican participation requirement to foreign productions only.
     production_origin: str
+
+    # Optional: enables the DGCINE validation guide rules (caps, cash payments,
+    # ITBIS matrix, Art. 168 exclusions). Keys: approved_budget_total,
+    # budget_currency, permit_start, permit_end (ISO dates).
+    project_context: Dict[str, Any]
+    guide_rules_evaluated: bool
+    eligibility_summary: Dict[str, Any]
 
     acquisition_fiscal_year: int
     transferee_isr_due_by_year_usd: Dict[int, float]
@@ -340,7 +351,7 @@ def validate_expenses_node(state: Art39State) -> Art39State:
 
     validated_rows: List[Dict[str, Any]] = []
 
-    for row in state.get("enriched_ncf_rows", []):
+    for position, row in enumerate(state.get("enriched_ncf_rows", []), start=1):
         _validate_required_keys(row, ["Total", "Tipo de Documento"], "NCF row")
 
         gross = _parse_amount(row["Total"])
@@ -376,6 +387,7 @@ def validate_expenses_node(state: Art39State) -> Art39State:
 
         validated_rows.append({
             "expense_id": row.get("Numero NCF", "UNSPECIFIED"),
+            "row_number": position,
             "applicant_id": state["applicant_id"],
             "project_id": state["project_id"],
             "fiscal_year": state["fiscal_year"],
@@ -388,6 +400,152 @@ def validate_expenses_node(state: Art39State) -> Art39State:
     return {
         **state,
         "expense_validation_outputs": validated_rows,
+        "audit_trace": audit,
+    }
+
+def _parse_date(value: Any, field: str) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as e:
+        raise ValueError(f"Invalid ISO date for '{field}': {value}") from e
+
+
+def eligibility_node(state: Art39State) -> Art39State:
+    """
+    Apply the DGCINE validation guide rules (JRD-G43) to the expenses that the
+    606/609 cross-check and basic validation produced.
+
+    Only runs when `project_context` is provided; otherwise the flow behaves as
+    before and the summary says the guide rules were not evaluated.
+
+    - The cross-check owns the NCF, duplicate and 606/609 rules; its rejections
+      enter the engine as "pre-rejected" and do not count toward the 6% / 3% caps.
+    - Each expense is identified internally by its row position, so repeated
+      NCFs cannot overwrite each other.
+    """
+    audit = _append_audit(state, "EligibilityNode: Applying DGCINE validation guide rules.")
+
+    context = state.get("project_context")
+    if not context:
+        return {
+            **state,
+            "guide_rules_evaluated": False,
+            "eligibility_summary": {},
+            "audit_trace": audit,
+        }
+
+    _validate_required_keys(
+        context,
+        ["approved_budget_total", "budget_currency", "permit_start", "permit_end"],
+        "project_context",
+    )
+
+    project = ProjectContext(
+        project_id=state["project_id"],
+        applicant_id=state["applicant_id"],
+        fiscal_year=state["fiscal_year"],
+        approved_budget_total=_parse_amount(context["approved_budget_total"]),
+        budget_currency=_normalize_currency(context["budget_currency"]),
+        permit_start=_parse_date(context["permit_start"], "project_context.permit_start"),
+        permit_end=_parse_date(context["permit_end"], "project_context.permit_end"),
+    )
+
+    outputs = state["expense_validation_outputs"]
+    expenses: List[ExpenseRecord] = []
+    prerejected: Dict[str, Tuple[Rejection, ...]] = {}
+
+    for index, (row, out) in enumerate(zip(state["enriched_ncf_rows"], outputs), start=1):
+        context_label = f"NCF row {index}"
+        _validate_required_keys(row, ["date", "cost", "itbis", "concept_code"], context_label)
+
+        engine_id = f"row-{index}"
+        total = _parse_amount(row["Total"])
+
+        expenses.append(ExpenseRecord(
+            expense_id=engine_id,
+            project_id=state["project_id"],
+            applicant_id=state["applicant_id"],
+            fiscal_year=state["fiscal_year"],
+            date=_parse_date(row["date"], f"{context_label} date"),
+            account=str(row.get("account", "UNSPECIFIED")),
+            ncf=row.get("Numero NCF"),
+            supplier=str(row.get("supplier", "")),
+            rnc=str(row.get("RNC", "")),
+            details="",
+            cost=_parse_amount(row["cost"]),
+            itbis=_parse_amount(row["itbis"]),
+            total=total,
+            payment_method=row.get("payment_method"),
+            concept_code=str(row["concept_code"]),
+            currency=out["currency"],
+            supplier_sirecine=row.get("supplier_sirecine") is True,
+        ))
+
+        if not out["validatable"]:
+            prerejected[engine_id] = tuple(
+                Rejection(
+                    "REPORTING_CROSSCHECK",
+                    reason,
+                    "Cross-check against DGII 606/609 (Guide JRD-G43, 8.7-8.8)",
+                    total,
+                )
+                for reason in out["exclusion_reasons"]
+            )
+
+    fx_policy = FXPolicy(
+        to_usd_rate={_normalize_currency(k): float(v) for k, v in state["fx_to_usd"].items()}
+    )
+
+    report = evaluate_project(
+        expenses,
+        project,
+        fx_policy,
+        prerejected=prerejected,
+        skip_ncf_rules=True,
+    )
+    decisions = {d.expense_id: d for d in report.decisions}
+
+    updated: List[Dict[str, Any]] = []
+    for index, out in enumerate(outputs, start=1):
+        decision = decisions[f"row-{index}"]
+
+        reasons = list(out["exclusion_reasons"])
+        for rejection in decision.rejections:
+            if rejection.message not in reasons:
+                reasons.append(rejection.message)
+
+        counts = decision.status != "rejected"
+
+        updated.append({
+            **out,
+            "validatable": counts,
+            "validated_amount": decision.admitted_cost if counts else 0.0,
+            "exclusion_reasons": reasons,
+            "eligibility": {
+                "status": decision.status,
+                "admitted_amount": decision.admitted_cost,
+                "excluded_amount": round(decision.cost - decision.admitted_cost, 2),
+                "rejections": [asdict(r) for r in decision.rejections],
+            },
+        })
+
+    summary = {
+        "currency": report.currency,
+        "executed_total": report.executed_total,
+        "admitted_total": report.admitted_total,
+        "rejected_total": report.rejected_total,
+        "rejected_by_primary_rule": report.rejected_by_primary_rule,
+        "caps": {name: asdict(cap) for name, cap in report.caps.items()},
+        "unconverted_row_numbers": [
+            int(expense_id.split("-")[1]) for expense_id in report.unconverted_expense_ids
+        ],
+    }
+
+    return {
+        **state,
+        "expense_validation_outputs": updated,
+        "guide_rules_evaluated": True,
+        "eligibility_summary": summary,
         "audit_trace": audit,
     }
 
@@ -562,15 +720,20 @@ def summary_node(state: Art39State) -> Art39State:
     - gross_credit_usd: informational, 25% of validated spend.
     - requestable_credit_usd: the same amount only if the request is eligible,
       otherwise 0.0.
-    - excluded_expenses: every expense excluded by validation, with reasons.
+    - excluded_expenses: every expense excluded entirely, with reasons.
+    - partially_admitted_expenses: expenses admitted only in part (for example
+      producer fees above the 6% cap), with admitted and excluded amounts.
     - fx_excluded_expenses: validated expenses left out of the threshold
       because no FX rate was provided (a configuration issue, not a spend issue).
+    - guide_rules_evaluated: False when no project_context was provided, so
+      the DGCINE guide rules were not applied.
     - blocking_reasons: short list explaining why the request is not eligible.
     """
     audit = _append_audit(state, "SummaryNode: Building final compliance decision.")
 
     threshold = state["threshold_result"]
     participation = state["participation_result"]
+    outputs = state["expense_validation_outputs"]
 
     threshold_ok = threshold["eligible_to_request"]
     participation_ok = participation["compliant"]
@@ -581,10 +744,23 @@ def summary_node(state: Art39State) -> Art39State:
     excluded_expenses = [
         {
             "expense_id": row["expense_id"],
+            "row_number": row["row_number"],
             "reasons": row["exclusion_reasons"],
         }
-        for row in state["expense_validation_outputs"]
+        for row in outputs
         if not row["validatable"]
+    ]
+
+    partially_admitted_expenses = [
+        {
+            "expense_id": row["expense_id"],
+            "row_number": row["row_number"],
+            "admitted_amount": row["eligibility"]["admitted_amount"],
+            "excluded_amount": row["eligibility"]["excluded_amount"],
+            "reasons": row["exclusion_reasons"],
+        }
+        for row in outputs
+        if row.get("eligibility", {}).get("status") == "partial"
     ]
 
     fx_excluded = [
@@ -613,18 +789,30 @@ def summary_node(state: Art39State) -> Art39State:
             f"required {participation['minimum_required_ratio']:.0%}."
         )
 
+    guide_evaluated = state.get("guide_rules_evaluated", False)
+
+    warnings: List[str] = list(participation["warnings"])
+    if not guide_evaluated:
+        warnings.append(
+            "project_context not provided; the exclusion rules of the DGCINE validation "
+            "guide (budget caps, cash payments, ITBIS, Art. 168 exclusions) were not "
+            "evaluated, so the validated spend may include expenses the guide excludes."
+        )
+
     compliance_status = {
         "threshold_met": threshold_ok,
         "participation_met": participation_ok,
         "participation_applicable": participation["applicable"],
+        "guide_rules_evaluated": guide_evaluated,
         "eligible_to_request": eligible,
         "validated_spend_usd": threshold["total_validated_usd"],
         "gross_credit_usd": gross_credit,
         "requestable_credit_usd": gross_credit if eligible else 0.0,
         "blocking_reasons": blocking_reasons,
         "excluded_expenses": excluded_expenses,
+        "partially_admitted_expenses": partially_admitted_expenses,
         "fx_excluded_expenses": fx_excluded,
-        "warnings": list(participation["warnings"]),
+        "warnings": warnings,
     }
 
     return {
@@ -656,13 +844,15 @@ def build_art39_graph():
     graph.add_node("ParticipationNode", participation_node)
     graph.add_node("CreditNode", credit_node)
     graph.add_node("SummaryNode", summary_node)
+    graph.add_node("EligibilityNode", eligibility_node)
 
     graph.set_entry_point("ValidateInputNode")
 
     graph.add_edge("ValidateInputNode", "LegalReasoningNode")
     graph.add_edge("LegalReasoningNode", "CrossCheckNode")
     graph.add_edge("CrossCheckNode", "ValidateExpensesNode")
-    graph.add_edge("ValidateExpensesNode", "ThresholdNode")
+    graph.add_edge("ValidateExpensesNode", "EligibilityNode")
+    graph.add_edge("EligibilityNode", "ThresholdNode")
     graph.add_edge("ThresholdNode", "ParticipationNode")
     graph.add_edge("ParticipationNode", "CreditNode")
     graph.add_edge("CreditNode", "SummaryNode")
