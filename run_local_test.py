@@ -68,6 +68,7 @@ def main() -> None:
         "fx_to_usd": {"DOP": 1 / 58.5, "USD": 1.0},
 
         # Participation settings
+        "production_origin": "foreign",  # "foreign" or "dominican" (Art. 39 Paragraph III)
         "waiver_override_present": False,
         "resident_flags": {},
 
