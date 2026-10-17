@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from .catalog import Concept, load_catalog
 from .models import (
@@ -226,7 +226,7 @@ def evaluate_project(
     *,
     catalog: Optional[Dict[str, Concept]] = None,
     params: Optional[EligibilityParams] = None,
-    prerejected: Optional[Dict[str, Sequence[Rejection]]] = None,
+    prerejected: Optional[Mapping[str, Sequence[Rejection]]] = None,
     skip_ncf_rules: bool = False,
 ) -> EligibilityReport:
     """
