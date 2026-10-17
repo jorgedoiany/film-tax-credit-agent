@@ -36,12 +36,11 @@ This repository implements an early compliance-checking pipeline for the Dominic
 | `threshold_validator.py`      | Converts validated expenses to USD using explicit rates and evaluates the threshold for one project or accumulated projects.                                                    |
 
 ## Requirements
-
-- Python: the deterministic engine and its tests were verified with Python 3.13.2 on macOS (Intel). TODO: verify other Python versions.
+- Python: the deterministic engine and its tests were verified with Python 3.13.2 (macOS Intel) and Python 3.14.7 (macOS Apple Silicon). TODO: verify other Python versions.
 - The deterministic pipeline needs only `requirements.txt` (LangGraph and requests). It does not need torch.
-- The optional legal RAG layer needs `requirements-rag.txt` (`torch`, `sentence-transformers`, `transformers`, `numpy`). Those versions were pinned from an Apple Silicon environment; `torch==2.10.0` has no wheels for Intel Macs. TODO: document tested hardware and Python version for the RAG layer.
-- When `legal_question` is non-empty, the code calls an Ollama server at `http://localhost:11434/api/generate` using model name `mistral`. The `run_local_test.py` sample supplies a legal question, so that run requires this local service plus the RAG dependencies.
-- The RAG code constructs `SentenceTransformer` with model name `all-MiniLM-L6-v2`. TODO: document model download/cache setup.
+- The optional legal RAG layer needs `requirements-rag.txt` (`torch`, `sentence-transformers`, `transformers`, `numpy`). It was verified end to end on an Apple Silicon Mac (Python 3.14.7, torch 2.10.0, sentence-transformers 5.2.3). `torch==2.10.0` has no wheels for Intel Macs, so the RAG layer cannot be installed there.
+- When `legal_question` is non-empty, the code calls an Ollama server at `http://localhost:11434/api/generate` using model name `mistral`. The `run_local_test.py` sample supplies a legal question, so that run requires this local service plus the RAG dependencies. Verified with Ollama 0.17.0 and `mistral:latest`.
+- The RAG code constructs `SentenceTransformer` with model name `all-MiniLM-L6-v2`. On the first run it is downloaded from the Hugging Face Hub (unauthenticated requests produce a warning; setting `HF_TOKEN` is optional). Chunk embeddings are cached under `data/vector_store/`, which is git-ignored.
 
 ## Setup
 
@@ -64,7 +63,7 @@ On Windows, activate it with `.venv\Scripts\activate`. 2. Install the engine and
    python -m pip install -r requirements-rag.txt
 ```
 
-4. Keep the legal source at `data/legal_sources/article_39_structured.txt`; the RAG node refers to this repository-relative path. For a non-empty legal question, start an Ollama server with the `mistral` model available. TODO: exact Ollama installation and model setup instructions.
+4. Keep the legal source at `data/legal_sources/article_39_structured.txt`; the RAG node refers to this repository-relative path. For a non-empty legal question, install [Ollama](https://ollama.com), make sure the `mistral` model is available (`ollama list`; if missing, `ollama pull mistral`), and start the server with `ollama serve`.
 
 ## Usage
 
@@ -136,7 +135,7 @@ The tests do not require torch, a running Ollama server, or network access (the 
 - TODO: Derive the fiscal year from each expense.
 - TODO: Add the waiver details (reduced percentage and resolution reference).
 - TODO: Use Decimal for money.
-- TODO: Document local Ollama and `all-MiniLM-L6-v2` setup, and tested hardware for the RAG layer.
+- TODO: Evaluate the quality of the local LLM answers beyond a single question (the citation check validates chunk IDs, not whether the content is faithful to the article).
 - TODO: Add tests for expense validation or remove the empty test file.
 
 ## License
