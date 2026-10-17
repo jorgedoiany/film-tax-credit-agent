@@ -1,0 +1,40 @@
+{
+  "_note": "Closed catalog. art168: none|producer_fees|development|financial|marketing|fixed_assets|alcohol|tobacco. itbis_regime: standard|dgii_exempt|art189_cine|art191_excluded. To add a good or service qualified by a CIPAC resolution (Art. 190), add a row.",
+  "concepts": [
+    {"code": "artistic_services", "label": "Artistic services (screenwriting, directing, acting)", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "casting", "label": "Casting / selection of artistic personnel", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "filming_equipment", "label": "Filming, camera equipment, film stock and blank media", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "digital_post", "label": "Editing, conversion, animation and digital effects", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "costumes_props_sets", "label": "Costumes, props and set design (incl. materials)", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "special_effects_mechanical", "label": "Mechanical special effects", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "sound_music", "label": "Music, dubbing and sound editing", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "lighting", "label": "Lighting services and equipment", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "stage_equipment", "label": "Stage equipment, cranes, dollies and jibs", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "power_climate", "label": "Generators, cables, air conditioning and mobile dressing rooms", "art168": "none", "itbis_regime": "art189_cine"},
+    {"code": "spare_parts_film", "label": "Spare parts for filming equipment", "art168": "none", "itbis_regime": "art189_cine"},
+
+    {"code": "insurance", "label": "Insurance", "art168": "none", "itbis_regime": "dgii_exempt"},
+    {"code": "ground_transport", "label": "Ground transport of people and cargo", "art168": "none", "itbis_regime": "dgii_exempt"},
+    {"code": "utilities", "label": "Electricity, water and garbage collection", "art168": "none", "itbis_regime": "dgii_exempt"},
+    {"code": "health_services", "label": "Health services", "art168": "none", "itbis_regime": "dgii_exempt"},
+    {"code": "housing_rental", "label": "Housing rental", "art168": "none", "itbis_regime": "dgii_exempt"},
+    {"code": "education_cultural", "label": "Educational and cultural services", "art168": "none", "itbis_regime": "dgii_exempt"},
+
+    {"code": "food_beverages", "label": "Food and beverages", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "hotel_lodging", "label": "Hotel lodging", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "fuel", "label": "Fuel", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "cleaning_office_supplies", "label": "Cleaning supplies and office materials", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "makeup", "label": "Makeup", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "vehicle_rental_purchase", "label": "Motor vehicle purchase or rental", "art168": "none", "itbis_regime": "art191_excluded"},
+    {"code": "equipment_repair", "label": "Equipment repair", "art168": "none", "itbis_regime": "art191_excluded"},
+
+    {"code": "producer_fees", "label": "Producer fees", "art168": "producer_fees", "itbis_regime": "standard"},
+    {"code": "development_costs", "label": "Development expenses", "art168": "development", "itbis_regime": "standard"},
+    {"code": "financial_charges", "label": "Financial charges and performance bonds/guarantees", "art168": "financial", "itbis_regime": "dgii_exempt"},
+    {"code": "marketing_distribution", "label": "Marketing and distribution of the work", "art168": "marketing", "itbis_regime": "standard"},
+    {"code": "fixed_assets", "label": "Purchase of fixed assets", "art168": "fixed_assets", "itbis_regime": "standard"},
+    {"code": "alcoholic_beverages", "label": "Alcoholic beverages", "art168": "alcohol", "itbis_regime": "standard"},
+    {"code": "cigarettes", "label": "Cigarettes", "art168": "tobacco", "itbis_regime": "standard"},
+    {"code": "other_general", "label": "Other general expenses", "art168": "none", "itbis_regime": "standard"}
+  ]
+}

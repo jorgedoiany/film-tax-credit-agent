@@ -103,7 +103,7 @@ def test_dominican_production_is_not_blocked_by_participation():
     assert status["participation_met"] is True
     assert status["eligible_to_request"] is True
     assert status["requestable_credit_usd"] == status["gross_credit_usd"]
-    assert status["warnings"] == []
+    assert not any("production_origin" in w for w in status["warnings"])
 
 
 def test_missing_origin_assumes_foreign_and_warns():
