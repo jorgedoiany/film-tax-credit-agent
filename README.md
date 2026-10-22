@@ -2,13 +2,13 @@
 
 > **Note:** This repository is under active development. The latest code and data are available on the `develop` branch.
 
-> A deterministic Art. 39 compliance pipeline with optional local legal retrieval and explanation for film productions seeking the Dominican Republic's transferable tax credit.
+> MVP: a deterministic Art. 39 compliance pipeline with optional local legal retrieval and explanation for film productions seeking the Dominican Republic's transferable tax credit.
 
 ## Status
 - Implemented: a LangGraph pipeline that reconciles NCF rows with DGII 606/609 rows, validates basic reporting and amount conditions, applies the DGCINE validation guide rules (when `project_context` is provided), checks the USD 500,000 threshold on the admitted amount, evaluates Dominican/resident crew participation for foreign productions, estimates gross credit, and returns a compliance summary with per-expense exclusion reasons and an audit trace.
 - Implemented: an expense is excluded when it is missing from the 606, when its amount differs from the 606, or when it duplicates an earlier row (same supplier RNC and NCF).
 - Implemented (ported from the Alexa+ hackathon repo): exclusion rules of the guide JRD-G43 for cash payments, the 6% producer-fee and 3% development-cost caps (partial admission of the excess), financial charges, marketing and distribution, fixed assets, alcohol, tobacco, and the ITBIS matrix with the B14/E44 exemptions.
-- Implemented: an optional Article 39 retrieval and local LLM explanation layer with checks that cited chunk IDs were among those retrieved.
+- Implemented: an optional Article 39 retrieval and local LLM explanation layer with citations restricted to retrieved chunks: cited chunk IDs outside the retrieved set are flagged as invalid (they are detected, not removed).
 - Not implemented: guide rules that need human review or external checks (unrelated expenses, valid NCF lookup on the DGII site, incomplete supporting documents, withholdings, unsigned checks, illegible invoices).
 - Not implemented: ingestion of source documents, DGII or DGCINE service integrations; the pipeline receives structured rows and explicit values.
 - Not implemented: accumulated multi-project threshold evaluation in the LangGraph flow, and fiscal year per expense (one fiscal year is applied to all rows).
@@ -114,7 +114,7 @@ Install `requirements-dev.txt` and run from the repository root:
 python -m pytest
 ```
 
-The tests do not require torch, a running Ollama server, or network access (the RAG and LLM are replaced by fakes). 36 tests, covering:
+The tests do not require torch, a running Ollama server, or network access (the RAG and LLM are replaced by fakes). 36/36 tests passing across 7 test files, covering:
 - `tests/test_art39_golden.py`: a compliant case, a threshold failure, and a B17 expense missing its required 609 match.
 - `tests/test_crosscheck_amount_and_duplicates.py`: 606 amount mismatch, the 0.01 tolerance, duplicate invoices, and the same NCF from different suppliers.
 - `tests/test_summary_detail.py`: requestable credit, blocking reasons, foreign vs. Dominican participation, missing FX rate, per-expense exclusion reasons, and JSON serializability.
@@ -128,6 +128,8 @@ The tests do not require torch, a running Ollama server, or network access (the 
 
 - `data/legal_sources/article_39_structured.txt` is read by `LegalRAG` in the graph's legal-reasoning node. Its `[CHUNK_ID: ...]` sections and article/section/topic markers are parsed for retrieval and citation checking.
 - `data/legal_sources/article_39.txt` contains plain Article 39 text, but repository code does not reference it.
+- Both files reproduce Article 39 of Law 108-10 as amended by Law 82-13. Official legislative texts are excluded from copyright protection under Dominican Law 65-00 on Copyright, so they are not covered by the proprietary license below; the chunk markup in the structured file is part of this repository. They are a working transcription, not an official version: check against the Gaceta Oficial text before relying on them.
+- The repository contains no real DGCINE files or production data. All RNC, NCF, names and amounts in tests and samples are synthetic.
 
 ## Known limitations
 - The classification in `concepts.json` (Art. 168 category and ITBIS regime per concept) and the rule references come from the Alexa+ hackathon repo and have not been checked against Decree 370-11.
@@ -159,4 +161,4 @@ The tests do not require torch, a running Ollama server, or network access (the 
 
 ## License
 
-Proprietary. All rights reserved. See LICENSE.
+Proprietary. All rights reserved. See LICENSE. This does not apply to the legal texts in `data/legal_sources/` (see Legal sources).
